@@ -189,22 +189,201 @@ mutation {
 | REST API    | ~400ms      | ~4s (10 commits)  | ❌ No              | Medium     |
 | GraphQL     | ~600ms      | ~800ms (1 commit) | ❌ No              | High       |
 
+## When GraphQL API is the Clear Winner
+
+While REST and Kohsuke APIs work great for simple operations, GraphQL excels in specific scenarios:
+
+### 1. Atomic Multi-File Commits ⭐ PRIMARY ADVANTAGE
+
+**Problem with REST:**
+```bash
+# Deploying a website with 10 files
+PUT /repos/owner/repo/contents/index.html      # Commit 1
+PUT /repos/owner/repo/contents/styles.css      # Commit 2
+PUT /repos/owner/repo/contents/script.js       # Commit 3
+# ... 7 more commits
+# Result: 10 separate commits, messy git history, 20+ API calls
+```
+
+**GraphQL Solution:**
+```graphql
+mutation {
+  createCommitOnBranch(input: {
+    message: {headline: "Deploy website v2.0"}
+    fileChanges: {
+      additions: [
+        {path: "index.html", contents: "..."}
+        {path: "styles.css", contents: "..."}
+        {path: "script.js", contents: "..."}
+        # ... all 10 files
+      ]
+    }
+  })
+}
+# Result: 1 atomic commit, clean history, 1 API call
+```
+
+**Real-world scenarios:**
+- Static site deployments (HTML + CSS + JS + images)
+- Multi-file refactoring that should be one logical change
+- Documentation updates across multiple markdown files
+- Configuration changes affecting multiple config files
+- Database migrations with multiple SQL files
+
+### 2. Rate Limit Efficiency
+
+**Updating 50 files:**
+
+| Approach | API Calls               | Rate Limit Impact      |
+|----------|-------------------------|------------------------|
+| REST API | 100 (50 GETs + 50 PUTs) | 2% of 5,000/hour quota |
+| GraphQL  | 1 mutation              | ~0.1% of quota         |
+
+For high-frequency automation or CI/CD pipelines, this difference is significant.
+
+### 3. Preventing Race Conditions
+
+**REST API Race Condition:**
+```bash
+# Service A: GET file.txt (SHA: abc123) at T0
+# Service B: GET file.txt (SHA: abc123) at T1
+# Service A: PUT file.txt (SHA: abc123) → Success (new SHA: def456) at T2
+# Service B: PUT file.txt (SHA: abc123) → CONFLICT! at T3
+```
+
+**GraphQL with Branch-Level Protection:**
+```graphql
+mutation {
+  createCommitOnBranch(input: {
+    expectedHeadOid: "current-branch-head-sha"  # Checks entire branch state
+    fileChanges: { ... }
+  })
+}
+# Fails cleanly if ANY commit was made to the branch
+# More robust than per-file SHA checking
+```
+
+### 4. Complex Queries with Nested Data
+
+**Scenario:** Get repo info + branch details + file contents + commit history
+
+**REST API:**
+```bash
+GET /repos/owner/repo              # Request 1
+GET /repos/owner/repo/branches     # Request 2
+GET /repos/owner/repo/contents/... # Request 3
+GET /repos/owner/repo/commits      # Request 4
+# = 4 requests, over-fetching data
+```
+
+**GraphQL:**
+```graphql
+query {
+  repository(owner: "owner", name: "repo") {
+    id
+    defaultBranchRef {
+      name
+      target {
+        ... on Commit { 
+          oid
+          message
+          history(first: 5) {
+            nodes { message, author { name } }
+          }
+        }
+      }
+    }
+    object(expression: "HEAD:README.md") {
+      ... on Blob { text }
+    }
+  }
+}
+# = 1 request, get exactly what you need
+```
+
+### 5. Batch Operations with Mixed Actions
+
+**Scenario:** In one commit, you need to:
+- Update 3 files
+- Create 2 new files
+- Delete 1 file
+
+**REST API:**
+```bash
+# 6 requests (3 GET + 3 PUT for updates)
+# 2 requests (2 PUT for creates)
+# 2 requests (1 GET + 1 DELETE for deletion)
+# = 10 API calls, 6 separate commits
+```
+
+**GraphQL:**
+```graphql
+mutation {
+  createCommitOnBranch(input: {
+    fileChanges: {
+      additions: [
+        {path: "updated1.txt", contents: "..."}
+        {path: "updated2.txt", contents: "..."}
+        {path: "updated3.txt", contents: "..."}
+        {path: "new1.txt", contents: "..."}
+        {path: "new2.txt", contents: "..."}
+      ]
+      deletions: [
+        {path: "old-file.txt"}
+      ]
+    }
+  })
+}
+# = 1 API call, 1 atomic commit
+```
+
+## Decision Matrix: Which API to Use?
+
+| Scenario         | Files  | Frequency  | Recommendation   | Reason                        |
+|------------------|--------|------------|------------------|-------------------------------|
+| Update README    | 1      | Occasional | **Kohsuke/REST** | Simplest approach             |
+| Update config    | 1-2    | Daily      | **Kohsuke/REST** | Easy, well-documented         |
+| CI/CD deployment | 5-20   | Per commit | **GraphQL**      | Atomic commits, clean history |
+| Batch migration  | 50+    | One-time   | **GraphQL**      | Rate limit efficiency         |
+| Content sync     | 10-100 | Hourly     | **GraphQL**      | Performance critical          |
+| Quick automation | Any    | Ad-hoc     | **REST**         | Fast to prototype             |
+| Custom workflow  | Any    | Any        | **REST**         | Maximum flexibility           |
+
+## Performance Comparison: Real-World Example
+
+**Deploying a static blog (19 files: 1 HTML + 3 CSS + 5 JS + 10 images)**
+
+| Metric           | REST API                       | GraphQL API           | Winner    |
+|------------------|--------------------------------|-----------------------|-----------|
+| API Calls        | 38 (19 GET + 19 PUT)           | 1 mutation            | ✅ GraphQL |
+| Git Commits      | 19 separate commits            | 1 atomic commit       | ✅ GraphQL |
+| Rate Limit Usage | 38 requests                    | ~1 request            | ✅ GraphQL |
+| Git History      | Messy, hard to revert          | Clean, easy to revert | ✅ GraphQL |
+| Time to Deploy   | ~15-20 seconds                 | ~2-3 seconds          | ✅ GraphQL |
+| Code Complexity  | Medium (loops, error handling) | Low (single mutation) | ✅ GraphQL |
+| Learning Curve   | Low                            | Medium                | ✅ REST    |
+| Debugging        | Easy                           | Medium                | ✅ REST    |
+
 ## Recommendations
 
 ### For Most Use Cases: **Kohsuke GitHub API**
 - Easy to use, well-documented
 - Handles authentication, rate limiting automatically
 - Perfect for typical file operations
+- Best for teams new to GitHub API integration
 
 ### For Batch Operations: **GraphQL API**
-- Atomic multi-file commits
+- Atomic multi-file commits (THE killer feature)
 - Significant performance advantage for bulk updates
-- Worth the complexity for batch workflows
+- Essential for CI/CD pipelines with multi-file deployments
+- Worth the complexity when updating 5+ files regularly
+- Critical when clean git history matters
 
 ### For Custom Requirements: **Direct REST API**
 - Maximum flexibility
 - Good for edge cases or specific integration needs
 - Requires more maintenance
+- Best when you need fine-grained control over HTTP layer
 
 ## Rate Limits
 
