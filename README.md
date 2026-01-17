@@ -33,10 +33,10 @@ Three approaches are evaluated:
        └── main
            └── java
                └── com
-                   └── example
+                   └── examples
                        └── github
                            ├── GitHubApiComparison.java
-                           └── examples
+                           └── apis
                                ├── KohsukeGitHubExample.java
                                ├── RestApiExample.java
                                └── GraphQLApiExample.java
